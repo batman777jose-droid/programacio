@@ -35,7 +35,7 @@ jobs:
       run: |
         # Descargar e instalar Tailscale
         Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup.exe" -OutFile "$env:TEMP\tailscale.exe"
-Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
+msiexec.exe /i "$env:TEMP\tailscale.msi" /qn /norestart
     - name: Connect Tailscale
       run: |
         # Conectar a Tailscale
