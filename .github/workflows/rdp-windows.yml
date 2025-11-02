@@ -1,4 +1,4 @@
-name: RDP Windows VM (Simulado)
+name: RDP Windows VM
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  setup-tailscale:
+  setup-rdp-windows:
     runs-on: windows-latest
     timeout-minutes: 60
 
@@ -19,7 +19,7 @@ jobs:
         Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
         Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i","$env:TEMP\tailscale.msi","/qn","/norestart"
         Start-Sleep -Seconds 10
-
+        
     - name: Connect Tailscale
       shell: pwsh
       run: |
@@ -35,29 +35,37 @@ jobs:
         }
         echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
         
-        # Generar contraseña segura simulada
-        $chars = 65..90 + 97..122 + 48..57 | ForEach-Object {[char]$_}
-        $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
-        echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
-        # Agregar resumen paso a paso
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 🎉 RDP Simulado en GitHub Runner"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Dirección RDP (Tailscale):** $ip"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario (simulado):** github"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** $password"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "⏰ Nota: Esto es un runner ephemeral de GitHub, no una VM real persistente."
-
-    - name: Show Connection Info
+    - name: Configure RDP
+      shell: pwsh
+      run: |
+        # Habilitar RDP
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        
+        # Configurar usuario para RDP
+        net user runneruser "RdpPassword123!" /add
+        net localgroup "Remote Desktop Users" /add runneruser
+        net localgroup administrators /add runneruser
+        
+        Write-Host "RDP habilitado y usuario configurado"
+        
+    - name: Show RDP Connection Info
       shell: pwsh
       run: |
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "🎉 RDP Simulado Listo"
+        Write-Host "🎉 RDP Windows Listo"
         Write-Host "=========================================="
         Write-Host "RDP Address (Tailscale): $env:TAILSCALE_IP"
-        Write-Host "Username: github"
-        Write-Host "Password: $env:RDP_PASSWORD"
+        Write-Host "Username: runneruser"
+        Write-Host "Password: RdpPassword123!"
         Write-Host "=========================================="
-        Write-Host "⏰ Nota: Runner ephemeral, no VM persistente"
+        Write-Host "Nota: Conectarse desde un dispositivo en la misma red Tailscale"
         Write-Host "=========================================="
-        Write-Host ""
+        
+        # Agregar resumen
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 🎉 RDP Windows VM"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Dirección RDP:** $env:TAILSCALE_IP"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario:** runneruser"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** RdpPassword123!"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Requisitos:** Tailscale instalado en tu dispositivo"
