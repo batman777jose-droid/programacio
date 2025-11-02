@@ -14,41 +14,168 @@ jobs:
     timeout-minutes: 60
     
     steps:
-    - name: Install Tailscale
+    - name: Check system info
       shell: pwsh
       run: |
-        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
-        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i","$env:TEMP\tailscale.msi","/qn","/norestart"
+        Write-Host "🔧 Información del Sistema"
+        Write-Host "OS: $([Environment]::OSVersion)"
+        Write-Host "Usuario: $env:USERNAME"
+        Get-Date
+        
+    - name: Download and Install Tailscale
+      shell: pwsh
+      run: |
+        Write-Host "📥 Descargando Tailscale..."
+        try {
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+          Write-Host "✅ Descarga completada"
+        } catch {
+          Write-Host "❌ Error en descarga: $($_.Exception.Message)"
+          exit 1
+        }
+        
+        Write-Host "🔧 Instalando Tailscale..."
+        try {
+          $process = Start-Process -Wait -PassThru -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
+          if ($process.ExitCode -ne 0) {
+            Write-Host "❌ Error en instalación. Código: $($process.ExitCode)"
+            exit 1
+          }
+          Write-Host "✅ Instalación completada"
+        } catch {
+          Write-Host "❌ Error instalando: $($_.Exception.Message)"
+          exit 1
+        }
+        
         Start-Sleep -Seconds 10
         
-    - name: Connect Tailscale
+        # Verificar instalación
+        if (Test-Path "C:\Program Files\Tailscale\tailscale.exe") {
+          Write-Host "✅ Tailscale instalado correctamente"
+          & "C:\Program Files\Tailscale\tailscale.exe" version
+        } else {
+          Write-Host "❌ Tailscale no se encontró después de instalación"
+          exit 1
+        }
+        
+    - name: Connect to Tailscale
       shell: pwsh
       run: |
-        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}"
-        Start-Sleep -Seconds 15
+        Write-Host "🔗 Conectando a Tailscale..."
         
+        # Limpiar conexiones anteriores
+        Write-Host "🔄 Limpiando estado anterior..."
+        & "C:\Program Files\Tailscale\tailscale.exe" logout 2>$null
+        Start-Sleep -Seconds 5
+        
+        # Conectar con authkey
+        Write-Host "🔑 Autenticando con Tailscale..."
+        $result = & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --accept-routes --accept-dns 2>&1
+        Write-Host "Output de conexión: $result"
+        Write-Host "Exit Code: $LASTEXITCODE"
+        
+        # Esperar y verificar
+        Write-Host "⏳ Esperando establecimiento de conexión..."
+        Start-Sleep -Seconds 25
+        
+        # Verificar estado
+        Write-Host "📊 Verificando estado..."
+        $status = & "C:\Program Files\Tailscale\tailscale.exe" status
+        Write-Host "Status completo: $status"
+        
+        # Obtener IP
         $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
-        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+        Write-Host "IP obtenida: '$ip'"
         
-    - name: Show RDP Info
+        if ($ip -and $ip -ne "") {
+          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+          Write-Host "✅ Conexión exitosa - IP: $ip"
+        else {
+          Write-Host "❌ No se pudo obtener IP de Tailscale"
+          Write-Host "Posibles causas:"
+          Write-Host "1. AuthKey inválida o revocada"
+          Write-Host "2. Problemas de red en el runner"
+          Write-Host "3. Restricciones en la cuenta Tailscale"
+          exit 1
+        }
+        
+    - name: Configure RDP
       shell: pwsh
       run: |
-        Write-Host "RDP disponible en: $env:TAILSCALE_IP"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 🔗 RDP Access"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Tailscale IP:** $env:TAILSCALE_IP"
+        Write-Host "🖥️ Configurando Remote Desktop..."
+        
+        # Habilitar RDP
+        try {
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Write-Host "✅ RDP habilitado en registro y firewall"
+        } catch {
+          Write-Host "⚠️ Error configurando RDP: $($_.Exception.Message)"
+        }
+        
+        # Configurar usuario
+        Write-Host "👤 Configurando usuario RDP..."
+        try {
+          $userExists = Get-LocalUser -Name "runneradmin" -ErrorAction SilentlyContinue
+          if (-not $userExists) {
+            Write-Host "Creando usuario runneradmin..."
+            $securePassword = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
+            New-LocalUser -Name "runneradmin" -Password $securePassword -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "runneradmin"
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
+            Write-Host "✅ Usuario runneradmin creado"
+          } else {
+            Write-Host "✅ Usuario runneradmin ya existe"
+          }
+        } catch {
+          Write-Host "⚠️ Error configurando usuario: $($_.Exception.Message)"
+        }
+        
+    - name: Show Connection Information
+      shell: pwsh
+      run: |
+        Write-Host ""
+        Write-Host "🎉 ===== CONFIGURACIÓN COMPLETADA ====="
+        Write-Host "🖥️  RDP disponible en: $env:TAILSCALE_IP"
+        Write-Host "👤  Usuario: runneradmin"
+        Write-Host "🔑  Contraseña: [Configurada en secrets]"
+        Write-Host "🔧  Puerto: 3389"
+        Write-Host ""
+        Write-Host "📋 Para conectarte:"
+        Write-Host "1. Abre Conexión a Escritorio Remoto"
+        Write-Host "2. Ingresa la IP: $env:TAILSCALE_IP"
+        Write-Host "3. Usuario: runneradmin"
+        Write-Host "4. Contraseña del secret RDP_PASSWORD"
+        Write-Host ""
+        
+        # Agregar al summary del workflow
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# 🖥️ RDP Access Ready"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🔗 Información de Conexión"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **IP:** $env:TAILSCALE_IP"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Usuario:** runneradmin"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Puerto:** 3389"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Contraseña:** Usa el secret RDP_PASSWORD"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 📝 Instrucciones"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "1. Abre **Conexión a Escritorio Remoto**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "2. Conectate a: **$env:TAILSCALE_IP**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "3. Usuario: **runneradmin**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "4. Contraseña: **La del secret RDP_PASSWORD**"
 
   pages-deploy:
     runs-on: ubuntu-latest
     needs: rdp-setup
+    if: always()  # Se ejecuta incluso si RDP falla
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Pages
+    - name: Setup GitHub Pages
       uses: actions/configure-pages@v4
       
-    - name: Upload artifact
+    - name: Upload to Pages
       uses: actions/upload-pages-artifact@v3
       with:
         path: '.'
@@ -59,5 +186,5 @@ jobs:
       
     - name: Show Pages URL
       run: |
-        echo "Página desplegada en: ${{ steps.deployment.outputs.page_url }}"
+        echo "🌐 Página desplegada en: ${{ steps.deployment.outputs.page_url }}"
         echo "PAGES_URL=${{ steps.deployment.outputs.page_url }}" >> $env:GITHUB_ENV
