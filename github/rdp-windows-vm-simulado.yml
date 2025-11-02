@@ -1,0 +1,52 @@
+name: RDP Windows VM (Simulado)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-tailscale:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Install Tailscale
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i","$env:TEMP\tailscale.msi","/qn","/norestart"
+        Start-Sleep -Seconds 10
+
+    - name: Connect Tailscale
+      shell: pwsh
+      run: |
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}"
+        Start-Sleep -Seconds 15
+        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
+        if (-not $ip) { Write-Error "No se pudo obtener la IP de Tailscale"; exit 1 }
+        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+        $chars = 65..90 + 97..122 + 48..57 | ForEach-Object {[char]$_}
+        $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
+        echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 🎉 RDP Simulado en GitHub Runner"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Dirección RDP (Tailscale):** $ip"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario (simulado):** github"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** $password"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "⏰ Nota: Esto es un runner ephemeral de GitHub, no una VM real persistente."
+
+    - name: Show Connection Info
+      shell: pwsh
+      run: |
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "🎉 RDP Simulado Listo"
+        Write-Host "=========================================="
+        Write-Host "RDP Address (Tailscale): $env:TAILSCALE_IP"
+        Write-Host "Username: github"
+        Write-Host "Password: $env:RDP_PASSWORD"
+        Write-Host "=========================================="
+        Write-Host "⏰ Nota: Runner ephemeral, no VM persistente"
+        Write-Host "=========================================="
+        Write-Host ""
