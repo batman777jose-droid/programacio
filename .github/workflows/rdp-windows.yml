@@ -1,0 +1,76 @@
+name: RDP Windows VM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-rdp-vm:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Configure RDP
+      run: |
+        # Habilitar Escritorio Remoto
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+        
+        # Configurar firewall
+        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        
+        # Reiniciar servicio
+        Restart-Service -Name TermService -Force
+
+    - name: Create User
+      run: |
+        # Crear usuario con contraseña segura
+        $password = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | % {[char]$_})
+        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+        New-LocalUser -Name "github" -Password $securePassword -AccountNeverExpires
+        Add-LocalGroupMember -Group "Administrators" -Member "github"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "github"
+        echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+    - name: Install Tailscale
+      run: |
+        # Descargar e instalar Tailscale
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+        Start-Process msiexec -Args "/i `"$env:TEMP\tailscale.msi`" /quiet" -Wait
+
+    - name: Connect Tailscale
+      run: |
+        # Conectar a Tailscale
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
+        Start-Sleep -Seconds 10
+        $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+
+    - name: Install Docker and n8n
+      run: |
+        # Instalar Docker
+        Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile "$env:TEMP\docker.exe"
+        Start-Process -FilePath "$env:TEMP\docker.exe" -ArgumentList "install --quiet" -Wait
+        
+        # Instalar n8n
+        docker run -d --name n8n -p 5678:5678 -e N8N_BASIC_AUTH_ACTIVE=false n8nio/n8n:latest
+
+    - name: Show Connection Info
+      run: |
+        Write-Host "=========================================="
+        Write-Host "🎉 MÁQUINA VIRTUAL LISTA"
+        Write-Host "=========================================="
+        Write-Host "RDP Address: $env:TAILSCALE_IP"
+        Write-Host "Username: github"
+        Write-Host "Password: $env:RDP_PASSWORD"
+        Write-Host "n8n URL: http://localhost:5678"
+        Write-Host "=========================================="
+        Write-Host "⏰ Esta VM estará activa por 6 horas"
+        Write-Host "=========================================="
+
+    - name: Keep Alive
+      run: |
+        # Mantener la VM activa
+        while ($true) {
+            Write-Host "[$(Get-Date)] VM activa - Cancela manualmente para terminar"
+            Start-Sleep -Seconds 300
+        }
