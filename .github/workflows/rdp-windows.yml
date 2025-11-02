@@ -27,7 +27,8 @@ jobs:
     - name: Create User
       run: |
         # Crear usuario con contraseña segura
-        $password = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | % {[char]$_})
+        $chars = @(65..90 + 97..122 + 48..57 | ForEach-Object {[char]$_})
+        $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name "github" -Password $securePassword -AccountNeverExpires
         Add-LocalGroupMember -Group "Administrators" -Member "github"
@@ -38,13 +39,13 @@ jobs:
       run: |
         # Descargar e instalar Tailscale
         Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
-        Start-Process -Wait -PassThru -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
+        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i","$env:TEMP\tailscale.msi","/qn","/norestart"
         Start-Sleep -Seconds 10
 
     - name: Connect Tailscale
       run: |
         # Conectar a Tailscale
-        Start-Process -Wait -PassThru -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up", "--authkey=${{ secrets.TAILSCALE_AUTHKEY }}"
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
         Start-Sleep -Seconds 15
         
         # Obtener IP de Tailscale
