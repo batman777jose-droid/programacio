@@ -1,4 +1,4 @@
-name: RDP Windows VM
+name: RDP Windows VM (Simulado)
 
 on:
   workflow_dispatch:
@@ -7,34 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  create-rdp-vm:
+  setup-tailscale:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
 
     steps:
-    - name: Configure RDP
-      run: |
-        # Habilitar Escritorio Remoto
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-        
-        # Configurar firewall
-        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        
-        # Reiniciar servicio
-        Restart-Service -Name TermService -Force
-
-    - name: Create User
-      run: |
-        # Crear usuario con contraseña segura
-        $chars = @(65..90 + 97..122 + 48..57 | ForEach-Object {[char]$_})
-        $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
-        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-        New-LocalUser -Name "github" -Password $securePassword -AccountNeverExpires
-        Add-LocalGroupMember -Group "Administrators" -Member "github"
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "github"
-        echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
     - name: Install Tailscale
       run: |
         # Descargar e instalar Tailscale
@@ -44,7 +21,7 @@ jobs:
 
     - name: Connect Tailscale
       run: |
-        # Conectar a Tailscale
+        # Conectar a Tailscale usando la AuthKey del secret
         & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
         Start-Sleep -Seconds 15
         
@@ -56,35 +33,28 @@ jobs:
         }
         echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
         
-        # Agregar al summary
-        echo "### 🎉 RDP VM Lista" >> $env:GITHUB_STEP_SUMMARY
-        echo "**Dirección RDP:** $ip" >> $env:GITHUB_STEP_SUMMARY
-        echo "**Usuario:** github" >> $env:GITHUB_STEP_SUMMARY
-        echo "**Contraseña:** $env:RDP_PASSWORD" >> $env:GITHUB_STEP_SUMMARY
-        echo "" >> $env:GITHUB_STEP_SUMMARY
-        echo "⏰ Esta VM estará activa por 6 horas" >> $env:GITHUB_STEP_SUMMARY
+        # Generar contraseña segura simulada
+        $chars = @(65..90 + 97..122 + 48..57 | ForEach-Object {[char]$_})
+        $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
+        echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+        # Agregar resumen
+        echo "### 🎉 RDP Simulado en GitHub Runner" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Dirección RDP (Tailscale):** $ip" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Usuario (simulado):** github" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Contraseña:** $password" >> $env:GITHUB_STEP_SUMMARY
+        echo "⏰ Nota: Esto es un runner ephemeral de GitHub, no una VM real persistente." >> $env:GITHUB_STEP_SUMMARY
 
     - name: Show Connection Info
       run: |
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "🎉 MÁQUINA VIRTUAL LISTA"
+        Write-Host "🎉 RDP Simulado Listo"
         Write-Host "=========================================="
-        Write-Host "RDP Address: $env:TAILSCALE_IP"
+        Write-Host "RDP Address (Tailscale): $env:TAILSCALE_IP"
         Write-Host "Username: github"
         Write-Host "Password: $env:RDP_PASSWORD"
         Write-Host "=========================================="
-        Write-Host "⏰ Esta VM estará activa por 6 horas"
+        Write-Host "⏰ Nota: Runner ephemeral, no VM persistente"
         Write-Host "=========================================="
         Write-Host ""
-
-    - name: Keep VM Alive
-      run: |
-        # Mantener la VM activa por 355 minutos (5 minutos menos del timeout)
-        $endTime = (Get-Date).AddMinutes(355)
-        while ((Get-Date) -lt $endTime) {
-            $remaining = [math]::Round(($endTime - (Get-Date)).TotalMinutes, 1)
-            Write-Host "[$(Get-Date)] VM activa - Tiempo restante: $remaining minutos"
-            Start-Sleep -Seconds 60
-        }
-        Write-Host "⏰ Tiempo agotado - La VM se apagará pronto"
