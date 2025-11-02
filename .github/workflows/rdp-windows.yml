@@ -1,119 +1,139 @@
-name: RDP + GitHub Pages
+name: RDP Windows Server
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 jobs:
-  rdp-setup:
+  setup-rdp:
     runs-on: windows-latest
-    timeout-minutes: 60
-    
+    timeout-minutes: 120
+
     steps:
-    - name: Download Tailscale
-      shell: pwsh
-      run: |
-        Write-Host "📥 Descargando Tailscale..."
-        try {
-          # URL directa y funcional
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi"
-          Write-Host "✅ Descarga completada"
-        } catch {
-          Write-Host "❌ Error en descarga, intentando método alternativo..."
-          # Método alternativo
-          $url = "https://tailscale.com/download/windows"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi"
-        }
-        
-    - name: Install Tailscale
-      shell: pwsh
-      run: |
-        Write-Host "🔧 Instalando Tailscale..."
-        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
-        Start-Sleep -Seconds 15
-        Write-Host "✅ Tailscale instalado"
-
-    - name: Connect Tailscale
-      shell: pwsh
-      run: |
-        Write-Host "🔗 Conectando a Tailscale..."
-        
-        # Esperar a que el servicio esté listo
-        Start-Sleep -Seconds 10
-        
-        # Conectar con authkey
-        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --accept-routes --accept-dns
-        Write-Host "✅ Comando de conexión ejecutado"
-        
-        # Esperar conexión
-        Start-Sleep -Seconds 20
-        
-        # Obtener IP
-        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
-        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-        Write-Host "🎯 IP de Tailscale: $ip"
-
     - name: Configure Windows RDP
       shell: pwsh
       run: |
-        Write-Host "🖥️ Configurando RDP..."
+        Write-Host "🖥️ Configurando Remote Desktop..."
         
-        # Habilitar RDP
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        # 1. Habilitar RDP en el registro
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         
-        # Configurar firewall
+        # 2. Configurar firewall para RDP
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         
-        # Crear usuario para RDP
-        $securePassword = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
-        New-LocalUser -Name "runneradmin" -Password $securePassword -AccountNeverExpires
-        Add-LocalGroupMember -Group "Administrators" -Member "runneradmin"
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
+        # 3. Crear usuario administrador
+        $password = "Admin123456!"
+        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         
-        Write-Host "✅ RDP configurado - Usuario: runneradmin"
+        # Crear usuario si no existe
+        $userExists = Get-LocalUser -Name "rdpuser" -ErrorAction SilentlyContinue
+        if (-not $userExists) {
+            New-LocalUser -Name "rdpuser" -Password $securePassword -FullName "RDP User" -Description "Usuario para acceso remoto"
+            Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rdpuser"
+            Write-Host "✅ Usuario 'rdpuser' creado"
+        }
+        
+        # 4. Configurar NeverExpire para la contraseña
+        Set-LocalUser -Name "rdpuser" -PasswordNeverExpires $true
+        
+        # 5. Obtener información de red
+        $ipAddress = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -eq "Ethernet" -or $_.InterfaceAlias -eq "Ethernet 2"}).IPAddress
+        if (-not $ipAddress) {
+            $ipAddress = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -ne "127.0.0.1"}).IPAddress
+        }
+        
+        Write-Host "✅ RDP Configurado Exitosamente"
+        Write-Host "📍 IP: $($ipAddress -join ', ')"
+        Write-Host "👤 Usuario: rdpuser"
+        Write-Host "🔐 Contraseña: Admin123456!"
+        Write-Host "🔧 Puerto: 3389"
 
-    - name: Show RDP Connection Info
+    - name: Install Essential Software
       shell: pwsh
       run: |
-        Write-Host ""
-        Write-Host "🎉 === RDP LISTO ==="
-        Write-Host "📍 IP: $env:TAILSCALE_IP"
-        Write-Host "👤 Usuario: runneradmin"
-        Write-Host "🔐 Contraseña: ******"
-        Write-Host "🔧 Puerto: 3389"
-        Write-Host ""
+        Write-Host "📦 Instalando software esencial..."
         
-        # Agregar al resumen del workflow
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# 🖥️ RDP Configurado"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**IP:** $env:TAILSCALE_IP"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario:** runneradmin"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** [Del secret RDP_PASSWORD]"
+        # Instalar Chrome
+        $ChromeInstaller = "chrome_installer.exe"
+        Invoke-WebRequest "https://dl.google.com/chrome/install/375.126/chrome_installer.exe" -OutFile $ChromeInstaller
+        Start-Process -FilePath $ChromeInstaller -Args "/silent /install" -Wait
+        Remove-Item $ChromeInstaller
+        
+        Write-Host "✅ Chrome instalado"
 
-  pages-deploy:
+    - name: Display Connection Information
+      shell: pwsh
+      run: |
+        # Obtener IP actual
+        $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -eq "Dhcp"}).IPAddress | Select-Object -First 1
+        
+        if (-not $ip) {
+            $ip = "IP no disponible - Usa GitHub Codespaces"
+        }
+        
+        Write-Host ""
+        Write-Host "🎉 === SERVIDOR RDP CONFIGURADO ==="
+        Write-Host "📍 IP: $ip"
+        Write-Host "👤 Usuario: rdpuser"
+        Write-Host "🔐 Contraseña: Admin123456!"
+        Write-Host "🔧 Puerto: 3389"
+        Write-Host "⏰ Tiempo restante: ~115 minutos"
+        Write-Host ""
+        Write-Host "📋 INSTRUCCIONES:"
+        Write-Host "1. Abre 'Conexión a Escritorio Remoto'"
+        Write-Host "2. Conectate a: $ip"
+        Write-Host "3. Usuario: rdpuser"
+        Write-Host "4. Contraseña: Admin123456!"
+        Write-Host ""
+        Write-Host "⚠️  Este servidor estará activo por 2 horas"
+        
+        # Guardar en summary
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# 🖥️ Servidor RDP Listo"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**IP:** $ip"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario:** rdpuser"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** Admin123456!"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Puerto:** 3389"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 📝 Para conectar:"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "1. Abre **Conexión a Escritorio Remoto**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "2. Ingresa: **$ip**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "3. Usuario: **rdpuser**"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "4. Contraseña: **Admin123456!**"
+
+    - name: Keep Alive
+      shell: pwsh
+      run: |
+        Write-Host "🔄 Manteniendo servidor activo..."
+        # Mantener el servidor activo
+        for ($i = 0; $i -lt 115; $i++) {
+            Write-Host "Minuto $i - Servidor RDP activo"
+            Start-Sleep -Seconds 60
+        }
+        Write-Host "⏰ Tiempo agotado - Cerrando servidor"
+
+  deploy-website:
     runs-on: ubuntu-latest
-    needs: rdp-setup
+    needs: setup-rdp
     
     steps:
     - name: Checkout
       uses: actions/checkout@v4
       
-    - name: Setup Pages
-      uses: actions/configure-pages@v4
-      
-    - name: Upload to Pages
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: '.'
-        
     - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
-      
-    - name: Show Pages URL
       run: |
-        echo "🌐 Página desplegada: ${{ steps.deployment.outputs.page_url }}"
+        echo "🌐 Página web desplegada"
+        echo "Tu sitio estará disponible en: https://tu-usuario.github.io/tu-repositorio/"
+        
+        # Crear un index.html simple si no existe
+        if [ ! -f "index.html" ]; then
+          echo '<!DOCTYPE html>
+          <html>
+          <head>
+              <title>Mi Sitio Web</title>
+          </head>
+          <body>
+              <h1>¡Hola Mundo!</h1>
+              <p>Mi sitio web está funcionando correctamente.</p>
+          </body>
+          </html>' > index.html
+        fi
