@@ -1,0 +1,71 @@
+name: RDP Windows VM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-rdp-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Install Tailscale
+      shell: pwsh
+      run: |
+        # Descargar e instalar Tailscale
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i","$env:TEMP\tailscale.msi","/qn","/norestart"
+        Start-Sleep -Seconds 10
+        
+    - name: Connect Tailscale
+      shell: pwsh
+      run: |
+        # Conectar a Tailscale usando la AuthKey del secret
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}"
+        Start-Sleep -Seconds 15
+        
+        # Obtener IP de Tailscale
+        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
+        if (-not $ip) {
+            Write-Error "No se pudo obtener la IP de Tailscale"
+            exit 1
+        }
+        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+        
+    - name: Configure RDP
+      shell: pwsh
+      run: |
+        # Habilitar RDP
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        
+        # Configurar usuario para RDP
+        net user runneruser "RdpPassword123!" /add
+        net localgroup "Remote Desktop Users" /add runneruser
+        net localgroup administrators /add runneruser
+        
+        Write-Host "RDP habilitado y usuario configurado"
+        
+    - name: Show RDP Connection Info
+      shell: pwsh
+      run: |
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "🎉 RDP Windows Listo"
+        Write-Host "=========================================="
+        Write-Host "RDP Address (Tailscale): $env:TAILSCALE_IP"
+        Write-Host "Username: runneruser"
+        Write-Host "Password: RdpPassword123!"
+        Write-Host "=========================================="
+        Write-Host "Nota: Conectarse desde un dispositivo en la misma red Tailscale"
+        Write-Host "=========================================="
+        
+        # Agregar resumen
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 🎉 RDP Windows VM"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Dirección RDP:** $env:TAILSCALE_IP"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario:** runneruser"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** RdpPassword123!"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Requisitos:** Tailscale instalado en tu dispositivo"
