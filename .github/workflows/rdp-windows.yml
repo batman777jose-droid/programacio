@@ -14,213 +14,95 @@ jobs:
     timeout-minutes: 60
     
     steps:
-    - name: Download and Install Tailscale
+    - name: Download Tailscale
       shell: pwsh
       run: |
         Write-Host "📥 Descargando Tailscale..."
-        
-        # Intentar con diferentes URLs
-        $urls = @(
-          "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi",
-          "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi", 
-          "https://tailscale.com/download/windows"
-        )
-        
-        $success = $false
-        foreach ($url in $urls) {
-          try {
-            Write-Host "Intentando descargar desde: $url"
-            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi" -TimeoutSec 30
-            Write-Host "✅ Descarga exitosa desde: $url"
-            $success = $true
-            break
-          } catch {
-            Write-Host "❌ Falló $url : $($_.Exception.Message)"
-          }
+        try {
+          # URL directa y funcional
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi"
+          Write-Host "✅ Descarga completada"
+        } catch {
+          Write-Host "❌ Error en descarga, intentando método alternativo..."
+          # Método alternativo
+          $url = "https://tailscale.com/download/windows"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi"
         }
         
-        if (-not $success) {
-          Write-Host "🚨 Todas las URLs fallaron. Intentando método alternativo..."
-          # Método alternativo usando winget
-          winget install --id Tailscale.Tailscale --silent --accept-package-agreements --accept-source-agreements
-          Start-Sleep -Seconds 15
-        } else {
-          Write-Host "🔧 Instalando Tailscale..."
-          $process = Start-Process -Wait -PassThru -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
-          if ($process.ExitCode -ne 0) {
-            Write-Host "⚠️ Instalación MSI falló. Probando winget..."
-            winget install --id Tailscale.Tailscale --silent --accept-package-agreements --accept-source-agreements
-          }
-          Write-Host "✅ Instalación completada"
-        }
-        
-        Start-Sleep -Seconds 10
-        
-        # Verificar instalación
-        $tailscalePaths = @(
-          "C:\Program Files\Tailscale\tailscale.exe",
-          "$env:ProgramFiles\Tailscale\tailscale.exe",
-          "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
-        )
-        
-        $tailscaleExe = $null
-        foreach ($path in $tailscalePaths) {
-          if (Test-Path $path) {
-            $tailscaleExe = $path
-            Write-Host "✅ Tailscale encontrado en: $path"
-            break
-          }
-        }
-        
-        if (-not $tailscaleExe) {
-          Write-Host "❌ Tailscale no se encontró después de instalación"
-          Write-Host "Instalando via método directo..."
-          # Último intento con descarga directa
-          $webClient = New-Object System.Net.WebClient
-          $webClient.DownloadFile("https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi", "$env:TEMP\tailscale-final.msi")
-          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale-final.msi", "/qn", "/norestart"
-          Start-Sleep -Seconds 10
-        }
-        
-    - name: Connect to Tailscale
+    - name: Install Tailscale
+      shell: pwsh
+      run: |
+        Write-Host "🔧 Instalando Tailscale..."
+        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
+        Start-Sleep -Seconds 15
+        Write-Host "✅ Tailscale instalado"
+
+    - name: Connect Tailscale
       shell: pwsh
       run: |
         Write-Host "🔗 Conectando a Tailscale..."
         
-        # Encontrar tailscale.exe
-        $tailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
-        if (-not (Test-Path $tailscaleExe)) {
-          $tailscaleExe = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
-        }
-        
-        if (-not (Test-Path $tailscaleExe)) {
-          Write-Host "❌ No se pudo encontrar tailscale.exe"
-          exit 1
-        }
-        
-        Write-Host "Tailscale ejecutable: $tailscaleExe"
-        
-        # Limpiar conexiones anteriores
-        Write-Host "🔄 Limpiando estado anterior..."
-        & $tailscaleExe logout 2>$null
-        Start-Sleep -Seconds 5
+        # Esperar a que el servicio esté listo
+        Start-Sleep -Seconds 10
         
         # Conectar con authkey
-        Write-Host "🔑 Autenticando con Tailscale..."
-        $authKey = "${{ secrets.TAILSCALE_AUTHKEY }}"
-        if (-not $authKey -or $authKey -eq "") {
-          Write-Host "❌ TAILSCALE_AUTHKEY no está configurado"
-          exit 1
-        }
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --accept-routes --accept-dns
+        Write-Host "✅ Comando de conexión ejecutado"
         
-        Write-Host "Longitud de authkey: $($authKey.Length)"
-        $result = & $tailscaleExe up --authkey="$authKey" --accept-routes --accept-dns 2>&1
-        Write-Host "Output de conexión: $result"
-        Write-Host "Exit Code: $LASTEXITCODE"
-        
-        # Esperar y verificar
-        Write-Host "⏳ Esperando establecimiento de conexión..."
-        Start-Sleep -Seconds 25
-        
-        # Verificar estado
-        Write-Host "📊 Verificando estado..."
-        $status = & $tailscaleExe status
-        Write-Host "Status: $status"
+        # Esperar conexión
+        Start-Sleep -Seconds 20
         
         # Obtener IP
-        $ip = (& $tailscaleExe ip -4).Trim()
-        Write-Host "IP obtenida: '$ip'"
-        
-        if ($ip -and $ip -ne "") {
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-          Write-Host "✅ Conexión exitosa - IP: $ip"
-        else {
-          Write-Host "❌ No se pudo obtener IP de Tailscale"
-          Write-Host "Probando con más tiempo..."
-          Start-Sleep -Seconds 30
-          $ip = (& $tailscaleExe ip -4).Trim()
-          if ($ip) {
-            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-            Write-Host "✅ Conexión exitosa después de espera - IP: $ip"
-          } else {
-            exit 1
-          }
-        }
-        
-    - name: Configure RDP
+        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
+        echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+        Write-Host "🎯 IP de Tailscale: $ip"
+
+    - name: Configure Windows RDP
       shell: pwsh
       run: |
-        Write-Host "🖥️ Configurando Remote Desktop..."
+        Write-Host "🖥️ Configurando RDP..."
         
         # Habilitar RDP
-        try {
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Write-Host "✅ RDP habilitado en registro y firewall"
-        } catch {
-          Write-Host "⚠️ Error configurando RDP: $($_.Exception.Message)"
-        }
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         
-        # Configurar usuario
-        Write-Host "👤 Configurando usuario RDP..."
-        try {
-          $userExists = Get-LocalUser -Name "runneradmin" -ErrorAction SilentlyContinue
-          if (-not $userExists) {
-            Write-Host "Creando usuario runneradmin..."
-            $securePassword = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
-            New-LocalUser -Name "runneradmin" -Password $securePassword -AccountNeverExpires
-            Add-LocalGroupMember -Group "Administrators" -Member "runneradmin"
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
-            Write-Host "✅ Usuario runneradmin creado"
-          } else {
-            Write-Host "✅ Usuario runneradmin ya existe"
-          }
-        } catch {
-          Write-Host "⚠️ Error configurando usuario: $($_.Exception.Message)"
-        }
+        # Configurar firewall
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         
-    - name: Show Connection Information
+        # Crear usuario para RDP
+        $securePassword = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
+        New-LocalUser -Name "runneradmin" -Password $securePassword -AccountNeverExpires
+        Add-LocalGroupMember -Group "Administrators" -Member "runneradmin"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin"
+        
+        Write-Host "✅ RDP configurado - Usuario: runneradmin"
+
+    - name: Show RDP Connection Info
       shell: pwsh
       run: |
         Write-Host ""
-        Write-Host "🎉 ===== CONFIGURACIÓN COMPLETADA ====="
-        Write-Host "🖥️  RDP disponible en: $env:TAILSCALE_IP"
-        Write-Host "👤  Usuario: runneradmin"
-        Write-Host "🔑  Contraseña: [Configurada en secrets]"
-        Write-Host "🔧  Puerto: 3389"
-        Write-Host ""
-        Write-Host "📋 Para conectarte:"
-        Write-Host "1. Abre Conexión a Escritorio Remoto"
-        Write-Host "2. Ingresa la IP: $env:TAILSCALE_IP"
-        Write-Host "3. Usuario: runneradmin"
-        Write-Host "4. Contraseña del secret RDP_PASSWORD"
+        Write-Host "🎉 === RDP LISTO ==="
+        Write-Host "📍 IP: $env:TAILSCALE_IP"
+        Write-Host "👤 Usuario: runneradmin"
+        Write-Host "🔐 Contraseña: ******"
+        Write-Host "🔧 Puerto: 3389"
         Write-Host ""
         
-        # Agregar al summary del workflow
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# 🖥️ RDP Access Ready"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🔗 Información de Conexión"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **IP:** $env:TAILSCALE_IP"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Usuario:** runneradmin"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Puerto:** 3389"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Contraseña:** Usa el secret RDP_PASSWORD"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 📝 Instrucciones"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "1. Abre **Conexión a Escritorio Remoto**"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "2. Conectate a: **$env:TAILSCALE_IP**"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "3. Usuario: **runneradmin**"
-        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "4. Contraseña: **La del secret RDP_PASSWORD**"
+        # Agregar al resumen del workflow
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# 🖥️ RDP Configurado"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**IP:** $env:TAILSCALE_IP"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Usuario:** runneradmin"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Contraseña:** [Del secret RDP_PASSWORD]"
 
   pages-deploy:
     runs-on: ubuntu-latest
     needs: rdp-setup
-    if: always()
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       
-    - name: Setup GitHub Pages
+    - name: Setup Pages
       uses: actions/configure-pages@v4
       
     - name: Upload to Pages
@@ -234,5 +116,4 @@ jobs:
       
     - name: Show Pages URL
       run: |
-        echo "🌐 Página desplegada en: ${{ steps.deployment.outputs.page_url }}"
-        echo "PAGES_URL=${{ steps.deployment.outputs.page_url }}" >> $env:GITHUB_ENV
+        echo "🌐 Página desplegada: ${{ steps.deployment.outputs.page_url }}"
