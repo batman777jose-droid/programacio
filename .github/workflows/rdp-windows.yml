@@ -34,8 +34,9 @@ jobs:
     - name: Install Tailscale
       run: |
         # Descargar e instalar Tailscale
-        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup.exe" -OutFile "$env:TEMP\tailscale.exe"
-msiexec.exe /i "$env:TEMP\tailscale.msi" /qn /norestart
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+        msiexec.exe /i "$env:TEMP\tailscale.msi" /qn /norestart
+
     - name: Connect Tailscale
       run: |
         # Conectar a Tailscale
@@ -47,8 +48,8 @@ msiexec.exe /i "$env:TEMP\tailscale.msi" /qn /norestart
     - name: Install Docker and n8n
       run: |
         # Instalar Docker
-        Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile "$env:TEMP\docker.exe"
-        Start-Process -FilePath "$env:TEMP\docker.exe" -ArgumentList "install --quiet" -Wait
+        Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile "$env:TEMP\docker-installer.exe"
+        Start-Process -FilePath "$env:TEMP\docker-installer.exe" -ArgumentList "install --quiet" -Wait
         
         # Instalar n8n
         docker run -d --name n8n -p 5678:5678 -e N8N_BASIC_AUTH_ACTIVE=false n8nio/n8n:latest
