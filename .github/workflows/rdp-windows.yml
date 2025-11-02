@@ -12,18 +12,21 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
     - name: Configure RDP
       run: |
+        # Habilitar Escritorio Remoto
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+        
+        # Configurar firewall
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        
+        # Reiniciar servicio
         Restart-Service -Name TermService -Force
 
     - name: Create User
       run: |
+        # Crear usuario con contraseña segura
         $password = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | % {[char]$_})
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name "github" -Password $securePassword -AccountNeverExpires
@@ -33,31 +36,54 @@ jobs:
 
     - name: Install Tailscale
       run: |
+        # Descargar e instalar Tailscale
         Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
-        Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
+        Start-Process -Wait -PassThru -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
+        Start-Sleep -Seconds 10
 
     - name: Connect Tailscale
       run: |
-        Start-Process -Wait -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up", "--authkey=${{ secrets.TAILSCALE_AUTHKEY }}"
-        Start-Sleep -Seconds 10
+        # Conectar a Tailscale
+        Start-Process -Wait -PassThru -FilePath "C:\Program Files\Tailscale\tailscale.exe" -ArgumentList "up", "--authkey=${{ secrets.TAILSCALE_AUTHKEY }}"
+        Start-Sleep -Seconds 15
+        
+        # Obtener IP de Tailscale
         $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+        if (-not $ip) {
+            Write-Error "No se pudo obtener la IP de Tailscale"
+            exit 1
+        }
         echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-        echo "RDP Connection: $ip" >> $env:GITHUB_STEP_SUMMARY
+        
+        # Agregar al summary
+        echo "### 🎉 RDP VM Lista" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Dirección RDP:** $ip" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Usuario:** github" >> $env:GITHUB_STEP_SUMMARY
+        echo "**Contraseña:** $env:RDP_PASSWORD" >> $env:GITHUB_STEP_SUMMARY
+        echo "" >> $env:GITHUB_STEP_SUMMARY
+        echo "⏰ Esta VM estará activa por 6 horas" >> $env:GITHUB_STEP_SUMMARY
 
     - name: Show Connection Info
       run: |
+        Write-Host ""
         Write-Host "=========================================="
-        Write-Host "🎉 RDP VM READY - Connect via Tailscale"
+        Write-Host "🎉 MÁQUINA VIRTUAL LISTA"
         Write-Host "=========================================="
         Write-Host "RDP Address: $env:TAILSCALE_IP"
-        Write-Host "Username: github" 
+        Write-Host "Username: github"
         Write-Host "Password: $env:RDP_PASSWORD"
         Write-Host "=========================================="
+        Write-Host "⏰ Esta VM estará activa por 6 horas"
+        Write-Host "=========================================="
+        Write-Host ""
 
     - name: Keep VM Alive
       run: |
+        # Mantener la VM activa por 355 minutos (5 minutos menos del timeout)
         $endTime = (Get-Date).AddMinutes(355)
         while ((Get-Date) -lt $endTime) {
-            Write-Host "[$(Get-Date)] VM active - Time remaining: $([math]::Round(($endTime - (Get-Date)).TotalMinutes, 1)) minutes"
+            $remaining = [math]::Round(($endTime - (Get-Date)).TotalMinutes, 1)
+            Write-Host "[$(Get-Date)] VM activa - Tiempo restante: $remaining minutos"
             Start-Sleep -Seconds 60
         }
+        Write-Host "⏰ Tiempo agotado - La VM se apagará pronto"
