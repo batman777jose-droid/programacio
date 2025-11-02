@@ -14,48 +14,72 @@ jobs:
     timeout-minutes: 60
     
     steps:
-    - name: Check system info
-      shell: pwsh
-      run: |
-        Write-Host "🔧 Información del Sistema"
-        Write-Host "OS: $([Environment]::OSVersion)"
-        Write-Host "Usuario: $env:USERNAME"
-        Get-Date
-        
     - name: Download and Install Tailscale
       shell: pwsh
       run: |
         Write-Host "📥 Descargando Tailscale..."
-        try {
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
-          Write-Host "✅ Descarga completada"
-        } catch {
-          Write-Host "❌ Error en descarga: $($_.Exception.Message)"
-          exit 1
+        
+        # Intentar con diferentes URLs
+        $urls = @(
+          "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi",
+          "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi", 
+          "https://tailscale.com/download/windows"
+        )
+        
+        $success = $false
+        foreach ($url in $urls) {
+          try {
+            Write-Host "Intentando descargar desde: $url"
+            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.msi" -TimeoutSec 30
+            Write-Host "✅ Descarga exitosa desde: $url"
+            $success = $true
+            break
+          } catch {
+            Write-Host "❌ Falló $url : $($_.Exception.Message)"
+          }
         }
         
-        Write-Host "🔧 Instalando Tailscale..."
-        try {
+        if (-not $success) {
+          Write-Host "🚨 Todas las URLs fallaron. Intentando método alternativo..."
+          # Método alternativo usando winget
+          winget install --id Tailscale.Tailscale --silent --accept-package-agreements --accept-source-agreements
+          Start-Sleep -Seconds 15
+        } else {
+          Write-Host "🔧 Instalando Tailscale..."
           $process = Start-Process -Wait -PassThru -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/qn", "/norestart"
           if ($process.ExitCode -ne 0) {
-            Write-Host "❌ Error en instalación. Código: $($process.ExitCode)"
-            exit 1
+            Write-Host "⚠️ Instalación MSI falló. Probando winget..."
+            winget install --id Tailscale.Tailscale --silent --accept-package-agreements --accept-source-agreements
           }
           Write-Host "✅ Instalación completada"
-        } catch {
-          Write-Host "❌ Error instalando: $($_.Exception.Message)"
-          exit 1
         }
         
         Start-Sleep -Seconds 10
         
         # Verificar instalación
-        if (Test-Path "C:\Program Files\Tailscale\tailscale.exe") {
-          Write-Host "✅ Tailscale instalado correctamente"
-          & "C:\Program Files\Tailscale\tailscale.exe" version
-        } else {
+        $tailscalePaths = @(
+          "C:\Program Files\Tailscale\tailscale.exe",
+          "$env:ProgramFiles\Tailscale\tailscale.exe",
+          "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
+        )
+        
+        $tailscaleExe = $null
+        foreach ($path in $tailscalePaths) {
+          if (Test-Path $path) {
+            $tailscaleExe = $path
+            Write-Host "✅ Tailscale encontrado en: $path"
+            break
+          }
+        }
+        
+        if (-not $tailscaleExe) {
           Write-Host "❌ Tailscale no se encontró después de instalación"
-          exit 1
+          Write-Host "Instalando via método directo..."
+          # Último intento con descarga directa
+          $webClient = New-Object System.Net.WebClient
+          $webClient.DownloadFile("https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi", "$env:TEMP\tailscale-final.msi")
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i", "$env:TEMP\tailscale-final.msi", "/qn", "/norestart"
+          Start-Sleep -Seconds 10
         }
         
     - name: Connect to Tailscale
@@ -63,14 +87,34 @@ jobs:
       run: |
         Write-Host "🔗 Conectando a Tailscale..."
         
+        # Encontrar tailscale.exe
+        $tailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+        if (-not (Test-Path $tailscaleExe)) {
+          $tailscaleExe = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
+        }
+        
+        if (-not (Test-Path $tailscaleExe)) {
+          Write-Host "❌ No se pudo encontrar tailscale.exe"
+          exit 1
+        }
+        
+        Write-Host "Tailscale ejecutable: $tailscaleExe"
+        
         # Limpiar conexiones anteriores
         Write-Host "🔄 Limpiando estado anterior..."
-        & "C:\Program Files\Tailscale\tailscale.exe" logout 2>$null
+        & $tailscaleExe logout 2>$null
         Start-Sleep -Seconds 5
         
         # Conectar con authkey
         Write-Host "🔑 Autenticando con Tailscale..."
-        $result = & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --accept-routes --accept-dns 2>&1
+        $authKey = "${{ secrets.TAILSCALE_AUTHKEY }}"
+        if (-not $authKey -or $authKey -eq "") {
+          Write-Host "❌ TAILSCALE_AUTHKEY no está configurado"
+          exit 1
+        }
+        
+        Write-Host "Longitud de authkey: $($authKey.Length)"
+        $result = & $tailscaleExe up --authkey="$authKey" --accept-routes --accept-dns 2>&1
         Write-Host "Output de conexión: $result"
         Write-Host "Exit Code: $LASTEXITCODE"
         
@@ -80,11 +124,11 @@ jobs:
         
         # Verificar estado
         Write-Host "📊 Verificando estado..."
-        $status = & "C:\Program Files\Tailscale\tailscale.exe" status
-        Write-Host "Status completo: $status"
+        $status = & $tailscaleExe status
+        Write-Host "Status: $status"
         
         # Obtener IP
-        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4).Trim()
+        $ip = (& $tailscaleExe ip -4).Trim()
         Write-Host "IP obtenida: '$ip'"
         
         if ($ip -and $ip -ne "") {
@@ -92,11 +136,15 @@ jobs:
           Write-Host "✅ Conexión exitosa - IP: $ip"
         else {
           Write-Host "❌ No se pudo obtener IP de Tailscale"
-          Write-Host "Posibles causas:"
-          Write-Host "1. AuthKey inválida o revocada"
-          Write-Host "2. Problemas de red en el runner"
-          Write-Host "3. Restricciones en la cuenta Tailscale"
-          exit 1
+          Write-Host "Probando con más tiempo..."
+          Start-Sleep -Seconds 30
+          $ip = (& $tailscaleExe ip -4).Trim()
+          if ($ip) {
+            echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+            Write-Host "✅ Conexión exitosa después de espera - IP: $ip"
+          } else {
+            exit 1
+          }
         }
         
     - name: Configure RDP
@@ -166,7 +214,7 @@ jobs:
   pages-deploy:
     runs-on: ubuntu-latest
     needs: rdp-setup
-    if: always()  # Se ejecuta incluso si RDP falla
+    if: always()
     
     steps:
     - name: Checkout repository
